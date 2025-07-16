@@ -297,56 +297,72 @@ class FasterWhisperPipeline(Pipeline):
         print(f"Detected language: {language} ({language_probability:.2f}) in first 30s of audio...")
         return language
 
-
 def load_model(
     whisper_arch: str,
     device: str,
-    device_index=0,
-    compute_type="float16",
+    device_index: int = 0,
+    compute_type: str = "float16",
     asr_options: Optional[dict] = None,
     language: Optional[str] = None,
-    vad_model: Optional[Vad]= None,
-    vad_method: Optional[str] = "pyannote",
+    vad_model: Optional[Vad] = None,
+    vad_method: str = "pyannote",
     vad_options: Optional[dict] = None,
     model: Optional[WhisperModel] = None,
-    task="transcribe",
+    task: str = "transcribe",
     download_root: Optional[str] = None,
-    local_files_only=False,
-    threads=4,
+    local_files_only: bool = False,
+    threads: int = 4,
+    use_auth_token: Optional[str] = None,
 ) -> FasterWhisperPipeline:
     """Load a Whisper model for inference.
-    Args:
-        whisper_arch - The name of the Whisper model to load.
-        device - The device to load the model on.
-        compute_type - The compute type to use for the model.
-        vad_method - The vad method to use. vad_model has higher priority if is not None.
-        options - A dictionary of options to use for the model.
-        language - The language of the model. (use English for now)
-        model - The WhisperModel instance to use.
-        download_root - The root directory to download the model to.
-        local_files_only - If `True`, avoid downloading the file and return the path to the local cached file if it exists.
-        threads - The number of cpu threads to use per worker, e.g. will be multiplied by num workers.
-    Returns:
-        A Whisper pipeline.
-    """
 
+    Args:
+        whisper_arch: The name of the Whisper model to load.
+        device: The device to load the model on.
+        compute_type: The compute type to use for the model.
+        asr_options: A dictionary of ASR options for the model.
+        language: Language for transcription. Defaults to English if model ends with ".en".
+        vad_model: Optional manual VAD model. If provided, vad_method is ignored.
+        vad_method: Method for VAD if vad_model is not provided ("silero" or "pyannote").
+        vad_options: A dictionary of VAD-specific options.
+        model: An existing WhisperModel instance. If None, a new one is loaded.
+        task: The ASR task, default is "transcribe".
+        download_root: Directory to cache downloaded models.
+        local_files_only: If True, avoid downloads and use cached files.
+        threads: CPU threads per worker.
+        use_auth_token: Hugging Face auth token for private models.
+
+    Returns:
+        A configured FasterWhisperPipeline instance.
+    """
     if whisper_arch.endswith(".en"):
         language = "en"
 
-    model = model or WhisperModel(whisper_arch,
-                         device=device,
-                         device_index=device_index,
-                         compute_type=compute_type,
-                         download_root=download_root,
-                         local_files_only=local_files_only,
-                         cpu_threads=threads)
+    model = model or WhisperModel(
+        whisper_arch,
+        device=device,
+        device_index=device_index,
+        compute_type=compute_type,
+        download_root=download_root,
+        local_files_only=local_files_only,
+        cpu_threads=threads,
+    )
+
     if language is not None:
-        tokenizer = Tokenizer(model.hf_tokenizer, model.model.is_multilingual, task=task, language=language)
+        tokenizer = Tokenizer(
+            model.hf_tokenizer,
+            model.model.is_multilingual,
+            task=task,
+            language=language,
+        )
     else:
-        print("No language specified, language will be first be detected for each audio file (increases inference time).")
+        print(
+            "No language specified, language will be first detected for "
+            "each audio file (increases inference time)."
+        )
         tokenizer = None
 
-    default_asr_options =  {
+    default_asr_options = {
         "beam_size": 5,
         "best_of": 5,
         "patience": 1,
@@ -376,36 +392,32 @@ def load_model(
         "hotwords": None,
     }
 
-    if asr_options is not None:
+    if asr_options:
         default_asr_options.update(asr_options)
 
-    suppress_numerals = default_asr_options["suppress_numerals"]
-    del default_asr_options["suppress_numerals"]
-
+    suppress_numerals = default_asr_options.pop("suppress_numerals")
     default_asr_options = TranscriptionOptions(**default_asr_options)
 
     default_vad_options = {
-        "chunk_size": 30, # needed by silero since binarization happens before merge_chunks
+        "chunk_size": 30,  # needed by Silero since binarization happens before merge_chunks
         "vad_onset": 0.500,
-        "vad_offset": 0.363
+        "vad_offset": 0.363,
     }
 
-    if vad_options is not None:
+    if vad_options:
         default_vad_options.update(vad_options)
 
-    # Note: manually assigned vad_model has higher priority than vad_method!
-    if vad_model is not None:
+    if vad_model:
         print("Use manually assigned vad_model. vad_method is ignored.")
-        vad_model = vad_model
     else:
         if vad_method == "silero":
             vad_model = Silero(**default_vad_options)
         elif vad_method == "pyannote":
-            if device == 'cuda':
-                device_vad = f'cuda:{device_index}'
-            else:
-                device_vad = device
-            vad_model = Pyannote(torch.device(device_vad), use_auth_token=None, **default_vad_options)
+            vad_model = Pyannote(
+                torch.device(device),
+                use_auth_token=use_auth_token,
+                **default_vad_options,
+            )
         else:
             raise ValueError(f"Invalid vad_method: {vad_method}")
 
